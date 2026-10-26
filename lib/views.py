@@ -108,6 +108,10 @@ def page(title, body, top_lang="tamil"):
         '<main class="page" data-lang="%s">%s</main>'
         '<script src="/static/motion.js"></script>'
         '<script src="/static/app.js"></script>'
+        '<script>
+  window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+</script>
+<script defer src="/_vercel/insights/script.js"></script>'
         "</body></html>"
         % (esc(title), links, ICON_SEARCH, lang_options(top_lang),
            ICON_GEAR, esc(top_lang), body)
