@@ -215,15 +215,14 @@ def billboard_fallback():
 def home_page(top_lang):
     return ("Home",
             '<div class="bb-host" data-billboard>%s</div>'
-            '%s%s%s'
+            '%s%s'
             % (billboard_fallback(),
                shelf("Continue watching", "continue",
                      empty_text="Nothing part-watched yet. Start a film and "
                                 "it shows up here."),
                shelf("My list", "watchlist",
                      empty_text="Nothing saved yet. Use the + on any poster."),
-               shelf("Recently played", "recent",
-                     empty_text="Films you have started will be listed here.")),
+               ),
             top_lang)
 
 

@@ -37,7 +37,7 @@ as finished.
 **Analytics.** Time watched, films started, finished, list size, top genres,
 split by language, and what you played most recently.
 
-**Recently played.** Your own history on the home page. There are no
+Playback progress. Your current progress appears on the home page. There are no
 recommendations and no assistant; the only thing on the home page is what you
 have actually done.
 

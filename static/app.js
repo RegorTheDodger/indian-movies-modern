@@ -17,6 +17,7 @@ const LS_LIST = "iml:watchlist";
 const LS_PROGRESS = "iml:progress";
 const LS_WATCHED = "iml:watched";
 const LS_CATALOG = "iml:catalog";
+const LS_REMOVED = "iml:removed";
 
 /* past this fraction a film counts as finished and drops off continue */
 const DONE_AT = 0.95;
@@ -61,6 +62,7 @@ const getList = () => (Array.isArray(read(LS_LIST, [])) ? read(LS_LIST, []) : []
 const getProgress = () => read(LS_PROGRESS, {}) || {};
 const getWatched = () => read(LS_WATCHED, {}) || {};
 const getCatalog = () => read(LS_CATALOG, {}) || {};
+const getRemoved = () => read(LS_REMOVED, {}) || {};
 
 function setList(list) {
   write(LS_LIST, list);
@@ -84,19 +86,24 @@ function remember(item) {
 
 function toggleList(item) {
   const list = getList();
+  const removed = getRemoved();
   const at = list.findIndex((m) => m.id === item.id);
   if (at >= 0) {
     list.splice(at, 1);
+    removed[item.id] = Date.now();
   } else {
+    delete removed[item.id];
     list.unshift({
       id: item.id,
       title: item.title,
       cover: item.cover || "",
       url: item.url,
       year: item.year || "",
-      lang: item.lang || ""
+      lang: item.lang || "",
+      at: Date.now()
     });
   }
+  write(LS_REMOVED, removed);
   setList(list);
 }
 
@@ -122,9 +129,6 @@ function setResume(id, seconds, duration, meta) {
   write(LS_PROGRESS, p);
 }
 
-/* Cumulative play time, which is what the Recently played rail sorts by.
- * Separate from the resume position on purpose: the resume entry is deleted
- * when a film finishes, and this has to outlive it. */
 function addWatchTime(id, delta, meta) {
   if (!delta || delta <= 0 || delta > SEEK_LIMIT) return; // ignore seeks
   const w = getWatched();
@@ -149,15 +153,6 @@ function markFinished(id, meta) {
   const p = getProgress();
   delete p[id];
   write(LS_PROGRESS, p);
-}
-
-function recentlyPlayed() {
-  const watched = getWatched();
-  return Object.keys(watched)
-    .filter((id) => (watched[id].seconds || 0) > 0)
-    .sort((a, b) => (watched[b].at || 0) - (watched[a].at || 0))
-    .map((id) => Object.assign({}, watched[id], { id: id }))
-    .slice(0, 24);
 }
 
 function continueWatching() {
@@ -290,7 +285,7 @@ function renderBillboard() {
   let kicker = "From your list";
 
   if (!item) {
-    item = recentlyPlayed()[0] || continueWatching()[0] || null;
+    item = continueWatching()[0] || null;
     if (item) kicker = "Continue watching";
   }
 
@@ -321,9 +316,6 @@ function paint() {
   fill("watchlist", list.map((m) => Object.assign({ saved: true }, m)));
   fill("watchlist-full", list.map((m) => Object.assign({ saved: true }, m)));
   fill("continue", continueWatching());
-  fill("recent", recentlyPlayed().map((m) =>
-    Object.assign({ saved: saved.has(m.id) }, m)));
-
   document.querySelectorAll(".card-add, .watch-add").forEach((btn) => {
     const card = btn.closest("[data-id]");
     if (card) btn.classList.toggle("on", saved.has(card.dataset.id));
@@ -397,6 +389,7 @@ function wirePlayer() {
   video.addEventListener("ended", function () {
     markFinished(id, meta);
     paint();
+    syncAccount();
   });
 
   window.addEventListener("pagehide", tick);
@@ -445,12 +438,11 @@ function syncAccount() {
     .then((account) => {
       if (!account.authenticated) return;
       const state = {
-        watchlist: getList().map((item) =>
-          Object.assign({}, item, { at: item.at || Date.now() })),
+        watchlist: getList(),
         progress: getProgress(),
         watched: getWatched(),
         catalog: getCatalog(),
-        removed: {}
+        removed: getRemoved()
       };
       return fetch("/api/sync", {
         method: "POST",
@@ -467,6 +459,7 @@ function syncAccount() {
       write(LS_PROGRESS, state.progress || {});
       write(LS_WATCHED, state.watched || {});
       write(LS_CATALOG, state.catalog || {});
+      write(LS_REMOVED, state.removed || {});
       paint();
     })
     .catch(() => {
@@ -557,6 +550,11 @@ document.addEventListener("click", function (event) {
         });
       }
     } else if (action === "clear-watchlist") {
+      const removed = getRemoved();
+      getList().forEach((item) => {
+        if (item && item.id) removed[item.id] = Date.now();
+      });
+      write(LS_REMOVED, removed);
       setList([]);
     } else if (action === "clear-search") {
       const form = btn.closest("form");
@@ -567,10 +565,11 @@ document.addEventListener("click", function (event) {
         field.focus();
       }
     } else if (action === "clear-all") {
-      [LS_LIST, LS_PROGRESS, LS_WATCHED, LS_CATALOG].forEach((k) =>
+      [LS_LIST, LS_PROGRESS, LS_WATCHED, LS_CATALOG, LS_REMOVED].forEach((k) =>
         localStorage.removeItem(k));
       paint();
     }
+    syncAccount();
     return;
   }
 
