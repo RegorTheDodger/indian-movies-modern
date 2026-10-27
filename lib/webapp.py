@@ -247,7 +247,8 @@ def create_app():
     # ---------------------------------------------------------------- misc
     @app.route("/healthz")
     def healthz():
-        return {"ok": True, "groq": bool(os.environ.get("GROQ_API_KEY"))}
+        return {"ok": True, "groq": bool(os.environ.get("GROQ_API_KEY")),
+                "database": accounts._store().dialect}
 
     @app.errorhandler(404)
     def not_found(_e):

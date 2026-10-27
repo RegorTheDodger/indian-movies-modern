@@ -186,7 +186,14 @@ def store():
     if _store is None:
         with _lock:
             if _store is None:
-                _store = Store((os.environ.get("DATABASE_URL") or "").strip())
+                url = next(
+                    (os.environ.get(key, "").strip()
+                     for key in ("DATABASE_URL", "POSTGRES_URL",
+                                 "POSTGRES_URL_NON_POOLING",
+                                 "POSTGRES_PRISMA_URL")
+                     if os.environ.get(key, "").strip()),
+                    "")
+                _store = Store(url)
     return _store
 
 
