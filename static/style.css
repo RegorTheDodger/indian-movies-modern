@@ -448,6 +448,28 @@ button {
 .btn.ghost:hover { background: var(--fill-hover); }
 .btn svg { flex: 0 0 auto; }
 
+.auth-form {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 12px 0 0;
+}
+.auth-form input {
+  min-width: 180px;
+  flex: 1 1 180px;
+  height: 44px;
+  padding: 0 13px;
+  color: var(--ink);
+  background: var(--fill);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  outline: none;
+}
+.auth-form input:focus { border-color: var(--accent-ink); }
+.auth-status { min-height: 1.5em; margin: 10px 0 0; color: #ff7b72; }
+.auth-status.good { color: #4ade80; }
+.auth-welcome { margin: 12px 0; color: var(--dim); }
+
 /* ---------------------------------------------------------- search field */
 
 .search-field {

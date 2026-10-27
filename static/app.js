@@ -6,8 +6,8 @@
  *   iml:watched    {id: {title, cover, url, year, lang, seconds, finished, at}}
  *   iml:catalog    {id: {title, cover, url, year}}
  *
- * No account and no server copy, which also means a list does not follow the
- * person between devices.
+ * When signed in, this state is merged with the account copy so it follows
+ * the person between the modern and Lumia sites.
  *
  * The server renders the catalogue shelves and the billboard. This file only
  * fills the personal shelves and keeps the add buttons in sync.
@@ -437,6 +437,107 @@ function wireBar() {
   window.addEventListener("scroll", sync, { passive: true });
 }
 
+/* Account state is merged on the server, so the same login works on both
+ * the modern and Lumia clients without exposing the password to JavaScript. */
+function syncAccount() {
+  fetch("/auth/me", { credentials: "same-origin" })
+    .then((response) => response.json())
+    .then((account) => {
+      if (!account.authenticated) return;
+      const state = {
+        watchlist: getList().map((item) =>
+          Object.assign({}, item, { at: item.at || Date.now() })),
+        progress: getProgress(),
+        watched: getWatched(),
+        catalog: getCatalog(),
+        removed: {}
+      };
+      return fetch("/api/sync", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(state)
+      });
+    })
+    .then((response) => response && response.ok ? response.json() : null)
+    .then((result) => {
+      if (!result || !result.state) return;
+      const state = result.state;
+      write(LS_LIST, state.watchlist || []);
+      write(LS_PROGRESS, state.progress || {});
+      write(LS_WATCHED, state.watched || {});
+      write(LS_CATALOG, state.catalog || {});
+      paint();
+    })
+    .catch(() => {
+      /* Offline browsing remains available when the account server is down. */
+    });
+}
+
+function updateAuthUi(account, message) {
+  const guest = document.querySelector("[data-auth-guest]");
+  const signedIn = document.querySelector("[data-auth-user]");
+  const name = document.querySelector("[data-auth-name]");
+  const status = document.querySelector("[data-auth-status]");
+  const loggedIn = !!(account && account.authenticated);
+  if (guest) {
+    guest.hidden = loggedIn;
+    if (loggedIn) guest.setAttribute("hidden", "hidden");
+    else guest.removeAttribute("hidden");
+  }
+  if (signedIn) {
+    signedIn.hidden = !loggedIn;
+    if (loggedIn) signedIn.removeAttribute("hidden");
+    else signedIn.setAttribute("hidden", "hidden");
+  }
+  if (name) name.textContent = loggedIn ? account.user.display : "";
+  if (status) {
+    status.textContent = message || "";
+    status.className = "auth-status" + (message ? " good" : "");
+  }
+}
+
+function wireAuth() {
+  fetch("/auth/me", { credentials: "same-origin" })
+    .then((response) => response.json())
+    .then((account) => updateAuthUi(account))
+    .catch(() => updateAuthUi({ authenticated: false }));
+
+  document.addEventListener("submit", (event) => {
+    const form = event.target.closest("[data-auth-form]");
+    if (!form) return;
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(form).entries());
+    fetch(form.action, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    })
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "Could not sign in.");
+        return result;
+      })
+      .then((account) => {
+        form.reset();
+        updateAuthUi(account, "Signed in. Your library is syncing.");
+        syncAccount();
+      })
+      .catch((error) => updateAuthUi({ authenticated: false }, error.message));
+  });
+
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-auth-logout]");
+    if (!button) return;
+    fetch("/auth/logout", { method: "POST", credentials: "same-origin" })
+      .then(() => {
+        updateAuthUi({ authenticated: false }, "You are signed out.");
+        paint();
+      });
+  });
+}
+
 /* ----------------------------------------------------------------- wiring */
 
 document.addEventListener("click", function (event) {
@@ -498,6 +599,8 @@ document.querySelectorAll('.search-field input[name="q"]').forEach((input) => {
 });
 
 paint();
+wireAuth();
+syncAccount();
 wirePlayer();
 wireRails();
 wireBar();

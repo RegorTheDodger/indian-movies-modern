@@ -1,9 +1,8 @@
 """
 HTML rendering.
 
-The server stays dumb: catalogue content comes from einthusan, and the
-browser owns anything personal (my list, watch time, resume position) in
-localStorage. No accounts, no database.
+Catalogue content comes from einthusan. Personal data remains in localStorage
+for offline browsing and is merged into the account database when signed in.
 
 Markup follows the class names in style.css. Rails are filled from app.js;
 everything server-rendered is static HTML so the page paints without JS.
@@ -60,9 +59,11 @@ ICON_NEXT = ('<svg viewBox="0 0 24 24" width="22" height="22" fill="none"'
 
 ICON_GEAR = ('<svg viewBox="0 0 24 24" width="19" height="19" fill="none"'
              ' stroke="currentColor" stroke-width="1.8" stroke-linecap="round"'
-             ' aria-hidden="true"><circle cx="12" cy="12" r="3.2"/>'
-             '<path d="M12 2.6v2.2M12 19.2v2.2M4.4 12H2.2M21.8 12h-2.2'
-             'M6.6 6.6 5 5M19 19l-1.6-1.6M6.6 17.4 5 19M19 5l-1.6 1.6"/></svg>')
+             ' stroke-linejoin="round" aria-hidden="true">'
+             '<path d="M9.6 3.2h4.8l.7 2.1a7.3 7.3 0 0 1 1.7 1l2.1-.6 2.4 4.1-1.5 1.6'
+             'a7.4 7.4 0 0 1 0 2l1.5 1.6-2.4 4.1-2.1-.6a7.3 7.3 0 0 1-1.7 1l-.7 2.1H9.6l-.7-2.1'
+             'a7.3 7.3 0 0 1-1.7-1l-2.1.6-2.4-4.1 1.5-1.6a7.4 7.4 0 0 1 0-2L2.7 9.8l2.4-4.1 2.1.6'
+             'a7.3 7.3 0 0 1 1.7-1z"/><circle cx="12" cy="12.4" r="2.7"/></svg>')
 
 
 # --------------------------------------------------------------------------
@@ -331,9 +332,34 @@ def settings_page(top_lang):
             "You can still switch it per search.</p>"
             '<form class="setlang" action="/settings" method="post">%s'
             '<button class="btn" type="submit">Save</button></form></section>'
+            '<section class="panel auth-panel" data-auth-panel><h2>Sync between devices</h2>'
+            '<p class="panel-note">Create an account or log in to sync your '
+            "list, watch time and resume positions between Lumia and modern.</p>"
+            '<p class="auth-status" data-auth-status role="status"></p>'
+            '<div data-auth-guest>'
+            '<form class="auth-form" data-auth-form="login" action="/auth/login" method="post">'
+            '<input type="text" name="username" placeholder="Username" '
+            'autocomplete="username" required>'
+            '<input type="password" name="password" placeholder="Password" '
+            'autocomplete="current-password" required>'
+            '<button class="btn" type="submit">Log in</button></form>'
+            '<form class="auth-form" data-auth-form="register" action="/auth/register" method="post">'
+            '<input type="text" name="username" placeholder="New username" '
+            'autocomplete="username" required>'
+            '<input type="password" name="password" placeholder="New password (8+ characters)" '
+            'autocomplete="new-password" required>'
+            '<button class="btn ghost" type="submit">Create account</button></form>'
+            '</div><div data-auth-user hidden>'
+            '<p class="auth-welcome">Signed in as <b data-auth-name></b></p>'
+            '<button class="btn ghost" type="button" data-auth-logout>Log out</button>'
+            '</div>'
+            '<form action="/auth/logout" method="post" hidden>'
+            '<button class="btn ghost" type="submit">Log out</button></form>'
+            '<p class="panel-note">Your list stays local until you log in; '
+            "the browser syncs it after authentication.</p></section>"
             '<section class="panel"><h2>Stored data</h2>'
-            '<p class="panel-note">Your list, watch time and resume positions '
-            "live in this browser. No account, no server copy.</p>"
+            '<p class="panel-note">Erase this browser\'s local list, watch time '
+            "and resume positions.</p>"
             '<button class="btn ghost" type="button" data-action="clear-all">'
             "Erase everything</button></section>" % rows,
             top_lang)
