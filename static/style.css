@@ -774,6 +774,11 @@ button {
 }
 .watch-sub { margin: 8px 0 0; font-size: 14px; color: var(--dim); }
 .watch-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.watch-actions .btn {
+  min-width: 150px;
+  text-align: center;
+  justify-content: center;
+}
 
 .watch-add .add-on { display: none; }
 .watch-add.on .add-off { display: none; }
