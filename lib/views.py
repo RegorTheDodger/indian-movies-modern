@@ -385,7 +385,7 @@ def watch_page(item, top_lang):
             '<div class="player-wrap"><div class="player">'
             '<video id="player" controls preload="metadata" playsinline>'
             '<source src="%s" type="video/mp4">'
-            "Your browser cannot play this file. The direct link is below."
+            "Your browser cannot play this file."
             "</video></div></div>"
             '<div class="watch-meta">'
             "<div><h1>%s</h1>%s</div>"
@@ -393,16 +393,16 @@ def watch_page(item, top_lang):
             '<button class="btn ghost watch-add" type="button" data-action="toggle">'
             '<span class="add-off">%s<span>My List</span></span>'
             '<span class="add-on">%s<span>In My List</span></span></button>'
-            '<a class="btn ghost" href="%s" download>Download</a>'
+            '<a class="btn ghost" href="%s" target="_blank" rel="noopener noreferrer">'
+            'Open in new tab</a>'
             "</div></div>"
             '<p class="resume" data-role="resume"></p>'
-            '<details class="direct"><summary>Direct link</summary><code>%s</code>'
-            "</details></article>"
+            "</article>"
             % (esc(item["id"]), esc(item["title"]), esc(item.get("cover") or ""),
                esc(item["url"]), esc(item.get("year", "")),
                esc(item["url"]), esc(item["title"]),
                ('<p class="watch-sub">%s</p>' % meta) if meta else "",
-               ICON_PLUS, ICON_CHECK, esc(item["url"]), esc(item["url"])),
+               ICON_PLUS, ICON_CHECK, esc(item["url"])),
             top_lang)
 
 
