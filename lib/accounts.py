@@ -86,19 +86,22 @@ def signup_allowed():
 def _throttle(key, limit, window):
     """Count an attempt. Returns (allowed, seconds_to_wait)."""
     now = int(time.time())
-    with _store().tx() as conn:
-        rows = conn.run("SELECT n, until FROM iml_throttle WHERE k = %s", (key,))
-        if not rows or rows[0][1] < now:
-            until = now + window
-            conn.run("INSERT INTO iml_throttle (k, n, until) VALUES (%s, 1, %s) "
-                     "ON CONFLICT (k) DO UPDATE SET n = 1, until = %s",
-                     (key, until, until))
+    try:
+        with _store().tx() as conn:
+            rows = conn.run("SELECT n, until FROM iml_throttle WHERE k = %s", (key,))
+            if not rows or rows[0][1] < now:
+                until = now + window
+                conn.run("INSERT INTO iml_throttle (k, n, until) VALUES (%s, 1, %s) "
+                         "ON CONFLICT (k) DO UPDATE SET n = 1, until = %s",
+                         (key, until, until))
+                return True, 0
+            count, until = rows[0]
+            if count >= limit:
+                return False, max(1, until - now)
+            conn.run("UPDATE iml_throttle SET n = n + 1 WHERE k = %s", (key,))
             return True, 0
-        count, until = rows[0]
-        if count >= limit:
-            return False, max(1, until - now)
-        conn.run("UPDATE iml_throttle SET n = n + 1 WHERE k = %s", (key,))
-        return True, 0
+    except Exception as exc:
+        raise Unavailable(str(exc)) from exc
 
 
 def _clear_throttle(key):
