@@ -153,6 +153,9 @@ button {
 .nav-links::-webkit-scrollbar { display: none; }
 
 .nav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   padding: 8px 14px;
   border-radius: var(--r-pill);
   font-size: 14px;
@@ -161,6 +164,7 @@ button {
   white-space: nowrap;
   transition: color var(--ease), background var(--ease);
 }
+.nav-link svg { flex: 0 0 auto; }
 .nav-link:hover { color: var(--ink); }
 .nav-link.on {
   color: var(--ink);
