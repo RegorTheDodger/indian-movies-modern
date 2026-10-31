@@ -1,189 +1,221 @@
 # RogFlix
 
-Search, a player, a watchlist, continue watching and watch statistics, across
-two catalogues: einthusan for the South Asian languages, Cinemeta and the
-VidSpark player for English.
+Films and shows from eight Indian languages, plus an English catalogue, streamed
+in the browser: search, a player, My List, continue watching, and accounts that
+keep that state in step across devices.
 
-| | what it is | where |
+Server-rendered Flask (Python) with a small vanilla-JavaScript front end. No
+framework, no bundler, no build step — `vercel --prod` uploads the source and
+Vercel runs `api/index.py` as a Python function.
+
+## How it is built
+
+| Layer | What it uses | Why that choice |
 | --- | --- | --- |
-| `einthusan-web/` | this one | port 8090 |
+| Server | Python 3.12, Flask 3.1 | One process serves both HTML and JSON, and the same code runs locally and as a Vercel function. Nothing has to be rewritten per host. |
+| Markup | Python strings in `lib/views.py` | Pages are assembled from a few helpers (`page`, `card`, `shelf`, `grid`). Every page is real HTML before a byte of JavaScript runs, so first paint does not wait on the client. No template engine, no template files to ship. |
+| Client | Vanilla JS: `static/app.js`, `static/motion.js` | The server already renders the catalogue and the shelves' markup; the browser only fills personal shelves and drives gestures. A framework would add a bundle and a hydration delay for work the server has done. |
+| Styles | Hand-written CSS with custom properties | One file, no preprocessor, no build step. |
+| Personal data | `localStorage`, six keys | Instant and offline. The account copy is a *merge* of it, never a replacement, so the browser stays usable while signed out. |
+| Accounts | Postgres in production, SQLite locally; driver `pg8000` | Vercel's filesystem is ephemeral, so accounts need a real database. `pg8000` is pure Python, so the function needs no native build; SQLite keeps local development offline. |
 
-The Windows Phone experiments (`einthusan-cdn/`, `einthusan-lumia/`) are
-parked: no feature work goes there, and nothing here depends on them. The name
-is RogFlix; the folders keep their old names so git history and links still
-resolve.
+## Layout
 
-## Run it
-
-```sh
-cd einthusan-web
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-GROQ_API_KEY=gsk_... .venv/bin/python app.py     # http://127.0.0.1:8090
 ```
+app.py               local dev server (Flask, port 8090)
+api/index.py         Vercel entry point
+lib/webapp.py        routes, cookies, auth wiring
+lib/views.py         every HTML page
+lib/einthusan.py     the Indian catalogue: fetch, parse, search
+lib/stremio.py       Cinemeta: English search, metadata, episodes
+lib/vidspark.py      the embed player's URLs
+lib/accounts.py      passwords, sessions, signup policy, stored state
+lib/sync.py          merging two devices' copies of the same state
+lib/db.py            Postgres/SQLite adapter and schema
+lib/ai.py            optional Groq spelling suggestions (no route calls it)
+static/app.js        My List, resume, continue watching, accounts, sync
+static/motion.js     spring and momentum for the shelves
+static/style.css     styles
+static/*.svg, *.png  logo, favicon, app icons, share card
+static/manifest.json installable web app
+```
+
+## Routes
+
+| Route | What it does |
+| --- | --- |
+| `GET /` | Home: continue watching and My List, filled in by `app.js` |
+| `GET /search?q=&lang=` | English searches Cinemeta; any other language searches einthusan |
+| `GET /title/<kind>/<id>?s=&e=` | One film or one episode: VidSpark player, full metadata, episode list |
+| `GET /watch/<id>?t=&c=&y=&l=` | The einthusan `<video>` player |
+| `GET /watchlist` | My List |
+| `GET/POST /settings` | Default language (stored in a cookie) |
+| `GET /convert?u=&check=1` | Turns an einthusan link or 4-character id into a playable page |
+| `GET /library`, `/library/search` | 303 to `/search?lang=english`, so old bookmarks still work |
+| `POST /auth/register`, `/auth/login`, `/auth/logout` | JSON or form; sets or clears the session cookie |
+| `GET /auth/me` | `{authenticated, user}` |
+| `GET/POST /api/sync`, `POST /api/sync/clear` | Whole-state merge for the signed-in account |
+| `GET /healthz` | Liveness, provider configuration, database dialect |
+| anything else | 303 to `/` |
 
 ## Features
 
-**Search.** Prefix search against einthusan's A–Z listing, with real poster
-art. Titles are indexed from their first letter, so search on the first word.
+### Search
 
-**My list.** Tap My List on any poster. Stored in `localStorage`; no account.
+Two engines behind one box.
 
-**Continue watching.** The player writes a resume position, and the shelf shows
-what is part-watched, most recent first, with a percentage. Reopening a film
-resumes at the saved second. Under 8 seconds is ignored, and past 95% it counts
-as finished.
+**English** goes to Cinemeta (default `https://v3-cinemeta.strem.io`). It answers
+everything the page needs: films, shows, posters, backgrounds, synopsis, cast,
+crew, runtime, rating, genres, trailer, IMDb id and episode lists. Responses are
+cached in-process for ten minutes; searches are also cached to disk for a day,
+so a repeat query — including on a cold Vercel instance — renders immediately.
 
-**Analytics.** Time watched, films started, finished, list size, top genres,
-split by language, and what you played most recently.
+**The Indian languages** have no full-text API at all. einthusan indexes titles
+by first letter, so a search is a prefix walk over its A–Z listing (up to four
+pages). If what was typed matches poorly, the first word is shortened up to four
+times and near matches are accepted, so a typo near the end of a word still
+finds the film. Every page that exists is fetched — nothing is dropped to beat a
+clock — and the speed comes from a keep-alive connection pool, because the TLS
+handshake is most of the cost of a cold search.
 
-Playback progress. Your current progress appears on the home page. There are no
-recommendations and no assistant; the only thing on the home page is what you
-have actually done.
+The language tabs keep the query when you switch. There are nine: English plus
+Tamil, Telugu, Hindi, Malayalam, Kannada, Bengali, Marathi and Punjabi. A watch
+URL pasted into the box is treated as a conversion and sent to `/convert`.
 
-## Analytics, and where the genres come from
+### My List
 
-Play time is accumulated in the browser, and it is a **separate record from the
-resume position** on purpose. The resume entry is deleted when a film is
-finished, so if it were also the tally the stats would forget everything you
-watched. Time is credited per tick and jumps longer than 6 seconds are treated
-as seeks, not watching.
+Add with the + on any poster. A **show is saved as the show** (`ext:series:tt0944947`),
+not as whichever episode happened to be open; older episode-level entries are
+folded into the show once on load. Removing writes a timestamped tombstone, so a
+stale device cannot resurrect the film at the next sync.
 
-Genres are the interesting problem: **einthusan publishes no genres at all** —
-no genre, no rating, no cast, no popularity. There is nothing to read. So the
-browser posts the titles you have seen to `/api/tags` and a model assigns them,
-and the result is cached. A film splits its time evenly across its genres so
-one three-genre film does not outrank three one-genre films. If you have not
-watched enough for time to be meaningful, it falls back to counting what you
-have saved and says so on the page.
+### Continue watching
 
-## Design
+The player writes a resume position, and the shelf shows what is part-watched,
+most recent first, with a percentage.
 
-Built on Apple's foundations, mainly:
+- a title earns a card only after **10 seconds** of real playback
+- a jump longer than **6 seconds** is a seek, not watching, and is not credited
+- the position is saved at most every **4 seconds**
+- at **95%** a title counts as finished and leaves the shelf
+- clearing the shelf writes per-title tombstones, so sync cannot bring them back
 
-- **Response.** Buttons and list buttons react on pointer-down, not release.
-- **Materials.** The bar and the stat panels are translucent layers with
-  `backdrop-filter`, so content scrolls underneath rather than the chrome
-  eating a fixed strip.
-- **Springs, not durations.** `static/motion.js` has a real spring integrated
-  on `requestAnimationFrame`, described with damping ratio and response the way
-  Apple describes them. The rails use it for 1:1 drag, momentum on release and
-  momentum projection (`(v/1000)·d/(1-d)`, d = 0.998), with progressive
-  rubber-banding at the ends. Nothing gesture-driven uses a CSS transition,
-  because those cannot be grabbed and reversed mid-flight.
-- **Interruptibility.** Grabbing a rail that is already throwing stops the
-  spring and hands over from wherever it actually was, so there is no jump.
-- **Typography.** Tracking is size-specific: the display type is `-0.028em` with
-  `1.03` leading, body text sits near zero, and the small uppercase labels pull
-  the other way at `0.055em`.
-- **Preferences.** `prefers-reduced-motion` swaps every spring for a
-  cross-fade, `prefers-reduced-transparency` frosts the materials to solid,
-  and `prefers-contrast: more` strengthens edges.
+For a series the resume point is per episode (`ext:series:<id>:<season>:<episode>`),
+so reopening S04E02 returns to that episode at its second, while My List holds
+only the show.
 
-Two Apple numbers worth knowing: a critically damped spring (damping 1.0) does
-not overshoot, which is right for anything that merely faded in; the rail
-release uses damping 0.85 because a flick really did carry momentum.
+### Resume, from either player
 
-## The Groq key
+VidSpark accepts `?t=<seconds>` to open at a position, and posts
+`postMessage` events tagged `source: "vidspark-player"` (`play`, `pause`,
+`seeked`, `ended`, each with `currentTime` and `duration`). The einthusan side is
+an ordinary `<video>`. Both feed the same record in this app's storage, which is
+what makes continue watching mean the same thing on both sides.
 
-Only used for genre tags, and only for films you have not tagged yet. Read from
-the environment; `.env` is gitignored.
+### Accounts and sync
+
+Passwords are PBKDF2-HMAC-SHA256, 240,000 iterations, per-user salt. A session is
+a random token; only its SHA-256 is stored, so a database dump cannot be replayed
+as a login. Sessions last 30 days and the cookie is `HttpOnly`, `SameSite=Lax`.
+Attempts are throttled per IP: 5 registrations an hour, 8 logins per 10 minutes.
+
+Sync posts the device's whole state and the server returns the merged result —
+merging, not last-write-wins, is what makes a phone and a laptop safe on one
+account:
+
+- **watchlist** — newest add per id wins; a removal is a tombstone that outvotes
+  older adds and expires after 180 days
+- **progress** — newest `at` wins; once a title is marked started it stays
+  started, whichever device said so first
+- **watched** — newer record supplies the metadata, but play time keeps the
+  larger tally and `finished` stays true once true
+- **catalog** — merged field by field, so a known title or cover is never
+  replaced by a blank
+- **finished or cleared** titles drop the resume point rather than sending a
+  device backwards
+
+Total state is capped at 400 KB. `IML_ALLOW_SIGNUP` decides who may register:
+`first` (default — only while the database is empty), `open`, or `closed`.
+
+### Convert
+
+`/convert?u=` pulls the 4-character id out of an einthusan link (or accepts the
+id on its own) and builds the player page. `&check=1` reads the first 256 bytes
+of the CDN file to confirm it is really there and reports the content type.
+
+## Playback sources
+
+| Catalogue | Page | Player | URL shape |
+| --- | --- | --- | --- |
+| einthusan | `/watch/<id>` | native `<video>` | `https://cdn2.einthusan.io/etv/content/D<id>.mp4` |
+| English (Cinemeta) | `/title/<kind>/<id>` | VidSpark iframe | `https://vidspark.to/movie/tt0413300`, `https://vidspark.to/tv/tt0944947/2/3` |
+
+Nothing is downloaded, converted or proxied: the server only builds the URL. That
+is what lets playback work on Vercel, where a function cannot carry a two-hour
+file. The trade is that VidSpark is somebody else's player, so its quality,
+subtitles and ads apply. A series opens on its first real season — season 0 is
+the specials list, which VidSpark has no episode for.
+
+## Running it
 
 ```sh
-GROQ_API_KEY=gsk_...
+cd einthusan-web
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python app.py            # http://127.0.0.1:8090
 ```
 
-`GET /healthz` reports whether one was found. Without it the site still works,
-the genre panels just stay empty.
+Without `DATABASE_URL` it uses SQLite at `.data/iml.db`, so it runs offline.
 
-Two things learned the hard way:
+## Configuration
 
-- Groq answers **403 to urllib's default User-Agent**. `lib/ai.py` sends its
-  own.
-- Models rotate and your key cannot reach `llama-3.1-8b-instant`. Only
-  `qwen/qwen3.8-27b`, the gpt-oss models and whisper are available, so `MODELS`
-  is a fallback chain tried in order.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | unset → SQLite | Postgres for accounts and sync (`POSTGRES_URL` and friends are also read) |
+| `IML_DB_PATH` | `.data/iml.db` | SQLite file for local development |
+| `IML_ALLOW_SIGNUP` | `first` | `first`, `open` or `closed` |
+| `CINEMETA_URL` | `https://v3-cinemeta.strem.io` | Metadata provider |
+| `GROQ_API_KEY` | unset | Only for `lib/ai.py`; no route calls it at present |
 
-**Rotate that key.** It was pasted in a chat, so treat it as public.
-
-## Deploying to Vercel
+## Deploying
 
 ```sh
 cd einthusan-web
 vercel --prod
 ```
 
-`api/index.py` is the entry point. `vercel.json` only sets `maxDuration`.
-Set `GROQ_API_KEY` in the project's environment variables.
+`api/index.py` is the entry point and `vercel.json` only raises the function's
+`maxDuration` to 30 seconds. Set `DATABASE_URL` and `IML_ALLOW_SIGNUP` in the
+project's environment variables. Both are read per request, but Vercel only
+hands a new value to a new deployment, so redeploy after changing them.
 
-## Who can register
+## Stored data
 
-`IML_ALLOW_SIGNUP` decides who may create an account (`lib/accounts.py`):
+In the browser:
 
-- unset or `first` — only while the database has no users at all, so a fresh
-  deployment claims its owner and then stops accepting strangers
-- `open` (`1`, `true`, `yes`, `on` work too) — anyone can register
-- `closed` (`0`, `false`, `no`, `off`) — nobody can, not even the first user
+| Key | Contents |
+| --- | --- |
+| `iml:watchlist` | saved titles, newest first |
+| `iml:progress` | resume points, per film or per episode |
+| `iml:watched` | play time and finished flag per title |
+| `iml:catalog` | title, cover, year, language for anything seen |
+| `iml:removed` | tombstones for removed list entries |
+| `iml:dropped` | tombstones for cleared continue-watching entries |
 
-The production deployment runs with `open`. It is stored as a hidden Vercel
-secret, so a brand-new Vercel project does not inherit it and `first` silently
-stops signups once one account exists — the form then answers 403
-"Registration is closed on this site." Set it again there if you move hosts:
+In the database: `iml_users`, `iml_sessions`, `iml_state` (the merged JSON and
+its revision), `iml_throttle` (attempt counters).
 
-```sh
-printf 'open\n' | vercel env add IML_ALLOW_SIGNUP production
-```
+## Interface
 
-It is read per request, but Vercel only hands new values to a new deployment,
-so redeploy after changing it. Locally, omit it to test the default policy.
-
-## Layout
-
-```
-app.py            local dev server
-api/index.py      Vercel entry
-lib/einthusan.py  all network access, parsing, search
-lib/ai.py         optional Groq, off without a key
-lib/webapp.py     routes
-lib/views.py      HTML
-lib/vidspark.py   the embed player's URLs
-static/motion.js  springs, momentum, rubber-banding
-static/app.js     list, watch time, analytics
-static/style.css
-```
-
-Per-person state is deliberately client-side and there is no database, which
-also means a list does not follow the person between devices.
-
-## Playback
-
-English titles play through the **VidSpark** embed in an iframe on the title
-page. The URL is built from what the page already knows — the IMDb id Cinemeta
-returns, and the season and episode numbers it tracks:
-
-```
-https://vidspark.to/movie/tt0413300
-https://vidspark.to/tv/tt0944947/2/3
-```
-
-Nothing is downloaded, converted or proxied here. That is deliberate: it is
-what makes playback work on Vercel, where a function cannot carry a two-hour
-film. The trade is that VidSpark is somebody else's player, so its own
-quality, subtitles and ads apply, and there is no source list of ours.
-
-**Resume works both ways.** VidSpark remembers each viewer's place itself and
-accepts `?t=<seconds>` (or `?startAt=1h5m30s`) to open at a position, and it
-posts playback events over `postMessage` tagged `source: "vidspark-player"`
-(`play`, `pause`, `seeked`, `ended`, each with `currentTime` and `duration`).
-`static/app.js` listens to those, so the position, the watch-time totals and
-the "finished" flag stay in this app's own storage and sync to the account —
-the same record the Einthusan player writes. Our saved second is passed in on
-open and overrides the player's own memory, so continue-watching means the
-same thing on both sides.
-
-The Einthusan side is different. `/watch/<id>` points at an ordinary MP4 served
-straight from the CDN, so it keeps its own `<video>` player, its own resume
-tracking and no iframe.
-
-Framing was checked in a browser: VidSpark sends neither `X-Frame-Options` nor
-`Content-Security-Policy`, so the embed renders. If that ever changes, the page
-also offers an "open it in a new tab" link.
+- The page is complete before JavaScript: catalogue cards, title pages and
+  episode lists are server-rendered; only personal shelves are client-filled.
+- The shelves are physics, not CSS transitions: `static/motion.js` integrates a
+  spring on `requestAnimationFrame`, so a drag tracks 1:1, a flick carries
+  momentum, and grabbing a moving shelf hands over from where it actually is.
+  Damping ratio and response are the parameters, the way Apple's springs are
+  described.
+- `prefers-reduced-motion` replaces springs with cross-fades,
+  `prefers-reduced-transparency` frosts translucent layers to solid, and
+  `prefers-contrast: more` strengthens edges.
+- The name is RogFlix; the `einthusan-web` folder keeps its old name so git
+  history and existing links still resolve.
