@@ -1,18 +1,17 @@
-# Indian Movies Legacy — new site
+# RogFlix
 
-Search, a player, a watchlist, continue watching and watch statistics. This is
-the **second** site and is entirely separate from the Windows Phone one, which
-is untouched and still running.
+Search, a player, a watchlist, continue watching and watch statistics, across
+two catalogues: einthusan for the South Asian languages, Cinemeta and the
+VidSpark player for English.
 
 | | what it is | where |
 | --- | --- | --- |
-| `einthusan-cdn/` | old, zero JavaScript, built for the Lumia | port 8080 |
 | `einthusan-web/` | this one | port 8090 |
-| `movserver.py` | your movie library, untouched | port 8000 |
 
-The Lumia cannot do the modern TLS a CDN needs, so it keeps using the old
-zero-JavaScript version over plain HTTP on the LAN. Nothing here is expected to
-work on it, and nothing here breaks it.
+The Windows Phone experiments (`einthusan-cdn/`, `einthusan-lumia/`) are
+parked: no feature work goes there, and nothing here depends on them. The name
+is RogFlix; the folders keep their old names so git history and links still
+resolve.
 
 ## Run it
 

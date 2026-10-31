@@ -12,6 +12,8 @@ import html
 import re
 import urllib.parse
 
+from flask import request
+
 from . import einthusan as E
 from . import vidspark
 
@@ -28,6 +30,15 @@ LANG_OPTIONS = [("english", "English")] + list(E.LANGS)
 
 def esc(text):
     return html.escape(text or "", quote=True)
+
+
+def origin():
+    """Absolute base for the share card. Taken from the request so the tag is
+    right on localhost, on Render and on Vercel without being hard-coded."""
+    try:
+        return request.host_url.rstrip("/")
+    except RuntimeError:
+        return ""
 
 
 # --------------------------------------------------------------------------
@@ -110,18 +121,36 @@ def page(title, body, top_lang="english"):
            href, NAV_ICONS[key], esc(label))
         for href, label, key in NAV)
 
+    # The home page carries the site name; every other page leads with its own
+    # name so a tab in a crowded strip still says which page it is.
+    shown = ("RogFlix &middot; South Asian films and shows"
+             if current == "home" else "%s &middot; RogFlix" % esc(title))
+
     return (
         '<!DOCTYPE html>'
         '<html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<meta name="color-scheme" content="dark">'
         '<meta name="theme-color" content="#0b0b0f">'
-        '<link rel="icon" href="/static/icon.svg" type="image/svg+xml">'
+        '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">'
+        '<link rel="icon" href="/static/favicon-32.png" sizes="32x32"'
+        ' type="image/png">'
+        '<link rel="apple-touch-icon" href="/static/logo-180.png">'
+        '<link rel="manifest" href="/static/manifest.json">'
+        '<meta name="application-name" content="RogFlix">'
+        '<meta property="og:site_name" content="RogFlix">'
+        '<meta property="og:title" content="%s">'
+        '<meta property="og:image" content="%s/static/og.png">'
+        '<meta name="twitter:card" content="summary_large_image">'
+        '<meta name="description" content="Tamil, Telugu, Malayalam, '
+        'Kannada, Hindi and English films and shows.">'
         "<title>%s</title>"
         '<link rel="stylesheet" href="/static/style.css">'
         "</head><body>"
         '<header class="nav" id="bar"><div class="nav-inner">'
-        '<a class="brand" href="/">Indian<span>Movies</span></a>'
+        '<a class="brand" href="/" aria-label="RogFlix home">'
+        '<img class="brand-mark" src="/static/icon.svg" alt="" width="26"'
+        ' height="26"><span class="brand-word">Rog<em>Flix</em></span></a>'
         '<nav class="nav-links">%s</nav>'
         '<form class="nav-search" action="/search" method="get" role="search">'
         '<span class="nav-field">%s'
@@ -135,8 +164,8 @@ def page(title, body, top_lang="english"):
         '<script src="/static/motion.js"></script>'
         '<script src="/static/app.js?v=2"></script>'
         "</body></html>"
-        % (esc(title), links, ICON_SEARCH, lang_options(top_lang),
-           ICON_GEAR, esc(top_lang), body)
+        % (shown, origin(), shown, links, ICON_SEARCH,
+           lang_options(top_lang), ICON_GEAR, esc(top_lang), body)
     )
 
 
@@ -249,7 +278,7 @@ def billboard_fallback():
     its own for the first paint."""
     return (
         '<section class="bb bb-plain"><div class="bb-inner">'
-        '<p class="bb-kicker">Indian Movies</p>'
+        '<p class="bb-kicker">RogFlix</p>'
         '<h1 class="bb-title">Your next film<br>is one search away.</h1>'
         '<p class="bb-sub">Save anything with the + on a poster and the newest '
         'one shows up here.</p>%s</div></section>'
@@ -378,7 +407,7 @@ def settings_page(top_lang):
             '<button class="btn" type="submit">Save</button></form></section>'
             '<section class="panel auth-panel" data-auth-panel><h2>Sync between devices</h2>'
             '<p class="panel-note">Create an account or log in to sync your '
-            "list, watch time and resume positions between Lumia and modern.</p>"
+            "list, watch time and resume positions between your devices.</p>"
             '<p class="auth-status" data-auth-status role="status"></p>'
             '<div data-auth-guest>'
             '<form class="auth-form" data-auth-form="login" action="/auth/login" method="post">'

@@ -134,12 +134,22 @@ button {
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
   font-size: 19px;
   font-weight: 800;
   letter-spacing: -.02em;
   white-space: nowrap;
 }
-.brand span { color: var(--accent); }
+.brand-mark {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  border-radius: 7px;
+  display: block;
+}
+.brand em { color: var(--accent); font-style: normal; }
 
 .nav-links {
   display: flex;
@@ -957,7 +967,8 @@ button {
 @media (max-width: 640px) {
   body { font-size: 15px; }
   .nav-inner { gap: 12px; }
-  .brand { font-size: 17px; }
+  .brand { font-size: 17px; gap: 8px; }
+  .brand-mark { width: 23px; height: 23px; border-radius: 6px; }
   .nav-link { padding: 8px 10px; font-size: 13px; }
   .bb { min-height: 62vh; }
   .bb-actions .btn { padding: 11px 18px; }
@@ -977,10 +988,9 @@ button {
 
 .search-hero { padding: clamp(20px, 5vh, 48px) 0 8px; max-width: 760px; }
 .search-hero .display { margin: 10px 0 0; }
-.search-hero .lede { margin: 14px 0 0; }
+.search-hero .lede { margin: 14px auto 0; }
 .search-hero .eyebrow { margin: 0; }
-.search-hero .search-field { margin: 26px 0 0; }
-.search-hero.sf-center .search-field { max-width: 560px; }
+.search-hero .search-field { margin: 26px auto 0; }
 .sf-center .search-field { max-width: 560px; }
 .search-query { overflow-wrap: anywhere; }
 .lib-switch { margin: 16px 0 0; font-size: 13px; color: var(--faint); }

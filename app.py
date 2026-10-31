@@ -18,7 +18,7 @@ if __name__ == "__main__":
     threading.Thread(target=einthusan.warm, daemon=True).start()
 
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8090
-    print("Indian Movies Legacy - new site")
+    print("RogFlix")
     print("  http://127.0.0.1:%d" % port)
     print("  http://<mac-ip>:%d" % port)
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
