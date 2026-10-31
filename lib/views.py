@@ -9,9 +9,11 @@ everything server-rendered is static HTML so the page paints without JS.
 """
 
 import html
+import re
 import urllib.parse
 
 from . import einthusan as E
+from . import vidspark
 
 NAV = [
     ("/", "Home", "home"),
@@ -19,7 +21,9 @@ NAV = [
     ("/watchlist", "My List", "list"),
 ]
 
-LANG_OPTIONS = list(E.LANGS)
+# English is first and is the default: it has no einthusan catalogue, so the
+# search page answers it from Cinemeta instead.
+LANG_OPTIONS = [("english", "English")] + list(E.LANGS)
 
 
 def esc(text):
@@ -73,7 +77,16 @@ ICON_LIST = ('<svg viewBox="0 0 24 24" width="17" height="17" fill="none"'
              ' stroke="currentColor" stroke-width="2" stroke-linecap="round"'
              ' aria-hidden="true"><path d="M5 5h14M5 12h14M5 19h14"/></svg>')
 
-NAV_ICONS = {"home": ICON_HOME, "search": ICON_SEARCH, "list": ICON_LIST}
+ICON_LIB = ('<svg viewBox="0 0 24 24" width="17" height="17" fill="none"'
+            ' stroke="currentColor" stroke-width="2" stroke-linecap="round"'
+            ' stroke-linejoin="round" aria-hidden="true">'
+            '<rect x="3" y="4" width="7" height="7" rx="1.5"/>'
+            '<rect x="14" y="4" width="7" height="7" rx="1.5"/>'
+            '<rect x="3" y="15" width="7" height="7" rx="1.5"/>'
+            '<rect x="14" y="15" width="7" height="7" rx="1.5"/></svg>')
+
+NAV_ICONS = {"home": ICON_HOME, "search": ICON_SEARCH, "list": ICON_LIST,
+             "lib": ICON_LIB}
 
 
 # --------------------------------------------------------------------------
@@ -88,7 +101,7 @@ def lang_options(selected):
         for code, label in LANG_OPTIONS)
 
 
-def page(title, body, top_lang="tamil"):
+def page(title, body, top_lang="english"):
     current = title.lower()
     links = "".join(
         '<a class="nav-link%s" href="%s">%s<span>%s</span></a>'
@@ -120,7 +133,7 @@ def page(title, body, top_lang="tamil"):
         "</div></header>"
         '<main class="page" data-lang="%s">%s</main>'
         '<script src="/static/motion.js"></script>'
-        '<script src="/static/app.js"></script>'
+        '<script src="/static/app.js?v=2"></script>'
         "</body></html>"
         % (esc(title), links, ICON_SEARCH, lang_options(top_lang),
            ICON_GEAR, esc(top_lang), body)
@@ -153,14 +166,16 @@ def watch_href(item):
 
 
 def card(item):
-    href = watch_href(item)
+    """A card for anything already known to be playable. `href` lets a
+    library title point at its own page instead of straight at a player."""
+    href = item.get("href") or watch_href(item)
     poster = ('<img loading="lazy" src="%s" alt="">' % esc(item["cover"])
               if item.get("cover") else '<span class="card-none">No artwork</span>')
     meta = " &middot; ".join(esc(b) for b in (item.get("year"), item.get("lang")) if b)
 
     return (
         '<article class="card" data-id="%s" data-title="%s" data-cover="%s"'
-        ' data-url="%s" data-year="%s">'
+        ' data-url="%s" data-href="%s" data-year="%s" data-lang="%s">'
         '<a class="card-poster" href="%s" aria-label="%s">%s'
         '<span class="card-shade"></span>'
         '<span class="card-play">%s</span>'
@@ -171,16 +186,33 @@ def card(item):
         '<span class="add-on">%s</span></button>'
         "</article>"
         % (esc(item["id"]), esc(item["title"]), esc(item.get("cover") or ""),
-           esc(item["url"]), esc(item.get("year", "")), href, esc(item["title"]),
+           esc(item["url"]), esc(href), esc(item.get("year", "")),
+           esc(item.get("lang", "")), href, esc(item["title"]),
            poster, ICON_PLAY, esc(item["title"]),
            ('<em>%s</em>' % meta) if meta else "",
            ICON_PLUS, ICON_CHECK))
 
 
-def shelf(title, shelf_id, items_html="", empty_text="", note=""):
+def continue_head_actions():
+    """Emptying the shelf at once, behind its own yes/no question."""
+    return (
+        '<button class="shelf-clear" type="button" data-action="clear-continue"'
+        ' hidden>Clear all</button>'
+        '<span class="shelf-confirm" data-confirm="continue" hidden>'
+        "<span>Are you sure?</span>"
+        '<button class="btn tiny" type="button"'
+        ' data-action="confirm-clear-continue">Yes</button>'
+        '<button class="btn ghost tiny" type="button"'
+        ' data-action="cancel-clear-continue">No</button></span>'
+    )
+
+
+def shelf(title, shelf_id, items_html="", empty_text="", note="",
+          head_extra=""):
     head = '<h2>%s</h2>' % esc(title)
     if note:
         head += '<p class="shelf-note">%s</p>' % esc(note)
+    head += head_extra
     return (
         '<section class="shelf">'
         '<div class="shelf-head">%s</div>'
@@ -231,7 +263,8 @@ def home_page(top_lang):
             % (billboard_fallback(),
                shelf("Continue watching", "continue",
                      empty_text="Nothing part-watched yet. Start a film and "
-                                "it shows up here."),
+                                "it shows up here.",
+                     head_extra=continue_head_actions()),
                shelf("My list", "watchlist",
                      empty_text="Nothing saved yet. Use the + on any poster."),
                ),
@@ -433,3 +466,309 @@ def convert_page(raw, movie_id, ok, ctype, error):
             '<button class="btn" type="submit">Convert</button></form>%s</section>'
             '<div class="grid">%s</div>'
             % (badge, card(item)), "tamil")
+
+
+# --------------------------------------------------------------------------
+# library (Cinemeta for metadata, VidSpark for playback)
+# --------------------------------------------------------------------------
+
+
+def library_card(item):
+    """A Cinemeta title. It links to its own page, not to a player, because
+    a source has to be chosen first."""
+    kind = "series" if item.get("type") == "series" else "movie"
+    href = "/title/%s/%s" % (kind, esc(item["id"]))
+    ext_id = "ext:%s:%s" % (kind, item["id"])
+    cover = item.get("poster") or ""
+    poster = ('<img loading="lazy" src="%s" alt="">' % esc(cover)
+              if cover else '<span class="card-none">No artwork</span>')
+
+    bits = [item.get("year")]
+    if item.get("rating"):
+        bits.append("%s/10" % item["rating"])
+    meta = " &middot; ".join(esc(bit) for bit in bits if bit)
+
+    return (
+        '<article class="card" data-id="%s" data-title="%s" data-cover="%s"'
+        ' data-url="%s" data-href="%s" data-year="%s" data-lang="English">'
+        '<a class="card-poster" href="%s" aria-label="%s">%s'
+        '<span class="card-shade"></span><span class="card-play">%s</span>'
+        '<span class="card-text"><b>%s</b>%s</span></a>'
+        '<button class="card-add" type="button" data-action="toggle"'
+        ' aria-label="Add to my list"><span class="add-off">%s</span>'
+        '<span class="add-on">%s</span></button></article>'
+        % (esc(ext_id), esc(item.get("name")), esc(cover), esc(href), esc(href),
+           esc(item.get("year") or ""), href, esc(item.get("name") or ""),
+           poster, ICON_PLAY, esc(item.get("name") or ""),
+           ('<em>%s</em>' % meta) if meta else "", ICON_PLUS, ICON_CHECK))
+
+
+def library_field(value=""):
+    return (
+        '<form class="search-field sf-center" action="/search"'
+        ' method="get" role="search">'
+        '<input type="hidden" name="lang" value="english">'
+        '<span class="sf-input">%s<input type="search" name="q" value="%s"'
+        ' placeholder="Search movies and shows" autocomplete="off"'
+        ' aria-label="Search the library" required></span>'
+        '<button class="btn" type="submit">Search</button></form>'
+        % (ICON_SEARCH, esc(value)))
+
+
+def english_search_page(query, items=(), movies=(), series=(), failed=False):
+    """The English half of the search page.
+
+    English has no einthusan catalogue, so this asks Cinemeta directly and
+    links each result at its own title page. With no query it shows what is
+    popular instead, which is what the old library page did.
+    """
+    if query:
+        count = "%d result%s" % (len(items), "" if len(items) == 1 else "s")
+        body = [search_hero(
+            '<p class="eyebrow">English &middot; %s</p>'
+            '<h1 class="display search-query">%s</h1>'
+            % (esc(count), esc(query)),
+            "", query, "english")]
+        if items:
+            body.append('<section class="results"><div class="grid">%s</div>'
+                        '</section>'
+                        % "".join(library_card(i) for i in items))
+        elif failed:
+            body.append('<p class="empty bad">Cinemeta could not be reached '
+                        'just now. Try again in a moment.</p>')
+        else:
+            body.append('<p class="empty">Nothing in English matches '
+                        '&ldquo;%s&rdquo;. Another language tab may have it.'
+                        '</p>' % esc(query))
+        return ("Search", "".join(body), "english")
+
+    body = ['<section class="search-hero"><p class="eyebrow">Search</p>'
+            '<h1 class="display">Find something to watch</h1>'
+            '<p class="lede">English films and shows come from Cinemeta; the '
+            'Indian catalogue is one language tab away.</p>%s%s</section>'
+            % (library_field(), lang_tabs("", "english"))]
+    if movies:
+        body.append('<section class="results"><div class="shelf-head">'
+                    '<h2>Popular movies</h2></div><div class="grid">%s</div>'
+                    '</section>' % "".join(library_card(i) for i in movies))
+    if series:
+        body.append('<section class="results"><div class="shelf-head">'
+                    '<h2>Popular shows</h2></div><div class="grid">%s</div>'
+                    '</section>' % "".join(library_card(i) for i in series))
+    if not movies and not series:
+        body.append('<p class="empty bad">Nothing could be loaded just now. '
+                    'Search above, or reload in a moment.</p>')
+    return ("Search", "".join(body), "english")
+
+
+def _progress_id(kind, media_id, season, episode):
+    """What continue-watching counts as one thing: a film, or one episode."""
+    base = "ext:%s:%s" % (kind, media_id)
+    if kind == "series":
+        return "%s:%d:%d" % (base, season, episode)
+    return base
+
+
+def _runtime_seconds(value):
+    """Cinemeta writes runtimes as "22 min" or "1h 22min"; seconds please."""
+    text = str(value or "").lower()
+    hours = re.search(r"(\d+)\s*h", text)
+    minutes = re.search(r"(\d+)\s*m", text)
+    total = (int(hours.group(1)) * 3600 if hours else 0) + \
+            (int(minutes.group(1)) * 60 if minutes else 0)
+    if not total:
+        plain = re.match(r"^\s*(\d+)\s*$", text)
+        total = int(plain.group(1)) * 60 if plain else 0
+    return total
+
+
+def title_page(item, season=1, episode=1, seasons=(), by_season=None):
+    """One film or one episode: the player first, every known fact beneath it.
+
+    Cinemeta is the only source here — backdrop, poster, year, runtime, rating,
+    genres, synopsis, cast, crew, awards, links and the episode list all come
+    from it, so a film and a show are laid out the same way.
+    """
+    kind = "series" if item.get("type") == "series" else "movie"
+    href = "/title/%s/%s" % (kind, item["id"])
+    # what continue-watching reopens: one episode, not just the show
+    entry_href = ("%s?s=%d&e=%d" % (href, season, episode)
+                  if kind == "series" else href)
+    progress_id = _progress_id(kind, item["id"], season, episode)
+    seasons = list(seasons) or [1]
+    by_season = by_season or {}
+    poster = item.get("poster") or ""
+    background = item.get("background") or poster
+
+    # The list saves a show, not the episode somebody happens to be on: adding
+    # Game of Thrones from S04E02 puts Game of Thrones in My List. Resume
+    # positions stay per episode, so continue watching can still reopen it.
+    list_id = "ext:series:%s" % item["id"] if kind == "series" else progress_id
+
+    body = ['<article class="title" data-id="%s" data-title="%s"'
+            ' data-cover="%s" data-url="%s" data-href="%s" data-year="%s"'
+            ' data-runtime="%d" data-lang="English"'
+            ' data-list-id="%s" data-list-href="%s">'
+            % (esc(progress_id), esc(item.get("name")), esc(poster), esc(href),
+               esc(entry_href), esc(item.get("year") or ""),
+               _runtime_seconds(item.get("runtime")), esc(list_id), esc(href))]
+
+    # ---------------------------------------------------------------- stage
+    # The frame is the page. Nothing is stacked above it but the navigation
+    # bar, so a click on a card lands on the film rather than on a poster.
+
+    body.append('<section class="stage">')
+    if background:
+        body.append('<div class="stage-art"><img src="%s" alt=""></div>'
+                    % esc(background))
+    body.append('<div class="stage-scrim"></div><div class="stage-inner">')
+
+    # Playback is somebody else's player in a frame. Nothing is downloaded,
+    # converted or proxied here, which is what makes this work on Vercel too.
+    player = vidspark.embed_url(kind, item.get("id"), season, episode)
+    if player:
+        where = ("Season %d, episode %d" % (season, episode)
+                 if kind == "series" else "This film")
+        body.append(
+            '<div class="player-wrap"><div class="player">'
+            '<iframe id="player" src="%s" data-vidspark="%s" allowfullscreen'
+            ' allow="autoplay; fullscreen; encrypted-media; picture-in-picture"'
+            ' referrerpolicy="origin" loading="eager" title="%s on VidSpark">'
+            '</iframe></div></div>'
+            '<div class="stage-under">'
+            '<p class="resume" data-role="resume"></p>'
+            '<p class="play-note">%s plays on VidSpark, which remembers your '
+            'place — and so does this site. Its own quality, subtitles and ads '
+            'apply. <a href="%s" target="_blank" rel="noopener noreferrer">'
+            'Open in a new tab</a> if the frame stays blank.</p></div>'
+            % (esc(player), esc(player), esc(where), esc(where), esc(player)))
+    else:
+        body.append('<p class="play-note">Cinemeta did not return an IMDb id '
+                    'for this title, so there is no player to open.</p>')
+    body.append('</div></section>')
+
+    # ---------------------------------------------------------------- sheet
+    # Everything Cinemeta knows, underneath the frame: the poster, title, blurb
+    # and people on the left; the numbers and the buttons on the right, starting
+    # level with the title so the two columns read as one row.
+
+    body.append('<section class="sheet"><div class="sheet-cols">')
+
+    body.append('<div class="sheet-main"><div class="sheet-head">')
+    if poster:
+        body.append('<div class="sheet-poster"><img src="%s" alt=""></div>'
+                    % esc(poster))
+    body.append('<div class="sheet-id">')
+    eyebrow = "Series" if kind == "series" else "Film"
+    if kind == "series":
+        eyebrow += (" &middot; Season %d &middot; Episode %d"
+                    % (season, episode))
+    body.append('<p class="eyebrow">%s</p>' % eyebrow)
+    body.append('<h1 class="display">%s</h1>' % esc(item.get("name")))
+    body.append('</div></div>')
+
+    if item.get("description"):
+        body.append('<p class="synopsis">%s</p>' % esc(item["description"]))
+
+    rows = []
+    if item.get("directors"):
+        rows.append(("Director", esc(", ".join(item["directors"]))))
+    if item.get("writers"):
+        rows.append(("Written by", esc(", ".join(item["writers"]))))
+    cast = [name for name in (item.get("cast") or [])[:10] if name]
+    if cast:
+        rows.append(("Cast", esc(", ".join(cast))))
+    if item.get("country"):
+        rows.append(("Country", esc(item["country"])))
+    if item.get("awards"):
+        rows.append(("Awards", esc(item["awards"])))
+    if rows:
+        body.append('<dl class="facts">%s</dl>'
+                    % "".join("<dt>%s</dt><dd>%s</dd>" % (esc(key), value)
+                              for key, value in rows))
+    body.append('</div>')
+
+    body.append('<div class="sheet-side"><h2 class="side-head">Details</h2>')
+    details = []
+    if item.get("year"):
+        details.append(("Year", esc(item["year"])))
+    if item.get("runtime"):
+        details.append(("Runtime", esc(item["runtime"])))
+    if item.get("rating"):
+        details.append(("Rating", esc("%s/10 on IMDb" % item["rating"])))
+    if item.get("status"):
+        details.append(("Status", esc(item["status"])))
+    if item.get("released"):
+        details.append(("Released", esc(item["released"])))
+    if details:
+        body.append('<dl class="facts side-facts">%s</dl>'
+                    % "".join("<dt>%s</dt><dd>%s</dd>" % (esc(key), value)
+                              for key, value in details))
+
+    genre_html = "".join(
+        '<a class="chip" href="/search?q=%s&amp;lang=english">%s</a>'
+        % (esc(urllib.parse.quote(genre)), esc(genre))
+        for genre in (item.get("genres") or [])[:6])
+    if genre_html:
+        body.append('<div class="tag-row">%s</div>' % genre_html)
+
+    body.append('<div class="sheet-actions">'
+                '<button class="btn ghost watch-add" type="button"'
+                ' data-action="toggle"><span class="add-off">%s'
+                '<span>My List</span></span><span class="add-on">%s'
+                '<span>In My List</span></span></button>' % (ICON_PLUS, ICON_CHECK))
+    if item.get("trailer"):
+        body.append('<a class="btn ghost" href="https://www.youtube.com/watch?v=%s"'
+                    ' target="_blank" rel="noopener noreferrer">Trailer</a>'
+                    % esc(item["trailer"]))
+    if item.get("imdb"):
+        body.append('<a class="btn ghost" href="%s" target="_blank"'
+                    ' rel="noopener noreferrer">IMDb page</a>' % esc(item["imdb"]))
+    body.append('</div></div></div>')
+
+    body.append('<p class="title-foot">Every detail on this page comes from '
+                'Cinemeta &middot; playback runs in the VidSpark player.</p>')
+    body.append('</section>')
+
+    # ------------------------------------------------------------- episodes
+
+    if kind == "series" and by_season:
+        # every season is rendered once: switching is a class change in
+        # app.js instead of a round trip through the server
+        tabs = "".join(
+            '<a class="season-tab%s" href="%s?s=%d" data-season-tab="%d">'
+            'Season %d</a>'
+            % (" on" if value == season else "", esc(href), value, value, value)
+            for value in seasons)
+        groups, total = [], 0
+        for value in seasons:
+            entries = by_season.get(value) or []
+            total += len(entries)
+            cards = []
+            for entry in entries:
+                thumb = ('<img loading="lazy" src="%s" alt="">'
+                         % esc(entry["thumbnail"])) if entry.get("thumbnail") else ""
+                overview = ('<span class="ep-overview">%s</span>'
+                            % esc(entry["overview"])) if entry.get("overview") else ""
+                on = value == season and entry["episode"] == episode
+                cards.append(
+                    '<a class="episode%s" href="%s?s=%d&amp;e=%d"'
+                    ' data-season="%d" data-episode="%d">'
+                    '<span class="ep-thumb">%s</span>'
+                    '<span class="ep-body"><span class="ep-no">S%02d E%02d</span>'
+                    '<b class="ep-name">%s</b>%s</span></a>'
+                    % (" on" if on else "", esc(href), value, entry["episode"],
+                       value, entry["episode"], thumb, value, entry["episode"],
+                       esc(entry.get("name")
+                           or "Episode %d" % entry["episode"]), overview))
+            groups.append('<div class="episodes" data-season-group="%d"%s>%s</div>'
+                          % (value, "" if value == season else " hidden",
+                             "".join(cards)))
+        body.append('<section class="tv"><div class="shelf-head">'
+                    '<h2>Episodes</h2><p class="shelf-note" data-ep-count>%d '
+                    'episodes &middot; Season %d</p></div>'
+                    '<div class="seasons">%s</div>%s</section>'
+                    % (total, season, tabs, "".join(groups)))
+
+    body.append('</article>')
+    return (item.get("name") or "Title", "".join(body), "english")

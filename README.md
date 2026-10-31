@@ -116,6 +116,27 @@ vercel --prod
 `api/index.py` is the entry point. `vercel.json` only sets `maxDuration`.
 Set `GROQ_API_KEY` in the project's environment variables.
 
+## Who can register
+
+`IML_ALLOW_SIGNUP` decides who may create an account (`lib/accounts.py`):
+
+- unset or `first` — only while the database has no users at all, so a fresh
+  deployment claims its owner and then stops accepting strangers
+- `open` (`1`, `true`, `yes`, `on` work too) — anyone can register
+- `closed` (`0`, `false`, `no`, `off`) — nobody can, not even the first user
+
+The production deployment runs with `open`. It is stored as a hidden Vercel
+secret, so a brand-new Vercel project does not inherit it and `first` silently
+stops signups once one account exists — the form then answers 403
+"Registration is closed on this site." Set it again there if you move hosts:
+
+```sh
+printf 'open\n' | vercel env add IML_ALLOW_SIGNUP production
+```
+
+It is read per request, but Vercel only hands new values to a new deployment,
+so redeploy after changing it. Locally, omit it to test the default policy.
+
 ## Layout
 
 ```
@@ -125,6 +146,7 @@ lib/einthusan.py  all network access, parsing, search
 lib/ai.py         optional Groq, off without a key
 lib/webapp.py     routes
 lib/views.py      HTML
+lib/vidspark.py   the embed player's URLs
 static/motion.js  springs, momentum, rubber-banding
 static/app.js     list, watch time, analytics
 static/style.css
@@ -132,3 +154,37 @@ static/style.css
 
 Per-person state is deliberately client-side and there is no database, which
 also means a list does not follow the person between devices.
+
+## Playback
+
+English titles play through the **VidSpark** embed in an iframe on the title
+page. The URL is built from what the page already knows — the IMDb id Cinemeta
+returns, and the season and episode numbers it tracks:
+
+```
+https://vidspark.to/movie/tt0413300
+https://vidspark.to/tv/tt0944947/2/3
+```
+
+Nothing is downloaded, converted or proxied here. That is deliberate: it is
+what makes playback work on Vercel, where a function cannot carry a two-hour
+film. The trade is that VidSpark is somebody else's player, so its own
+quality, subtitles and ads apply, and there is no source list of ours.
+
+**Resume works both ways.** VidSpark remembers each viewer's place itself and
+accepts `?t=<seconds>` (or `?startAt=1h5m30s`) to open at a position, and it
+posts playback events over `postMessage` tagged `source: "vidspark-player"`
+(`play`, `pause`, `seeked`, `ended`, each with `currentTime` and `duration`).
+`static/app.js` listens to those, so the position, the watch-time totals and
+the "finished" flag stay in this app's own storage and sync to the account —
+the same record the Einthusan player writes. Our saved second is passed in on
+open and overrides the player's own memory, so continue-watching means the
+same thing on both sides.
+
+The Einthusan side is different. `/watch/<id>` points at an ordinary MP4 served
+straight from the CDN, so it keeps its own `<video>` player, its own resume
+tracking and no iframe.
+
+Framing was checked in a browser: VidSpark sends neither `X-Frame-Options` nor
+`Content-Security-Policy`, so the embed renders. If that ever changes, the page
+also offers an "open it in a new tab" link.

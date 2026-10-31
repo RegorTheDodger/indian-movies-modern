@@ -8,23 +8,40 @@ Routes
   GET  /watchlist
   GET  /settings         POST saves the default language
   GET  /convert          ?u=  and optionally &check=1
+  GET  /title/<kind>/<id>  ?s=&e=  one film or one episode, and its player
 """
 
 import os
+import re
+from concurrent.futures import ThreadPoolExecutor
+
+from urllib.parse import quote
+
 from flask import Flask, Response, jsonify, redirect, request
 
 from . import einthusan as E
 from . import accounts
+from . import stremio
 from . import views
 
-TOP_LANG_COOKIE = "iml_top_lang"
+# v2 on purpose: visitors who loaded the old default (tamil) once were given
+# a cookie for it, and it would otherwise outlive the change to English.
+TOP_LANG_COOKIE = "iml_top_lang2"
 COOKIE_MAX_AGE = 60 * 60 * 24 * 365
 SESSION_COOKIE = "iml_session"
 
 
 def _valid_lang(value):
-    value = (value or "").lower()
-    return value if value in E.LANG_CODES else "tamil"
+    """English searches Cinemeta; every other code is an einthusan catalogue."""
+    code = (value or "").strip().lower()
+    return code if code == "english" or code in E.LANG_CODES else "english"
+
+
+def _int_arg(value, fallback):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 def create_app():
@@ -38,7 +55,7 @@ def create_app():
     app.config["JSON_SORT_KEYS"] = False
 
     def top_lang():
-        return _valid_lang(request.cookies.get(TOP_LANG_COOKIE, "tamil"))
+        return _valid_lang(request.cookies.get(TOP_LANG_COOKIE, "english"))
 
     def render(name, body, lang=None):
         lang = lang or top_lang()
@@ -73,7 +90,38 @@ def create_app():
     @app.route("/search")
     def search():
         query = (request.args.get("q") or "").strip()[:80]
-        lang = _valid_lang((request.args.get("lang") or "tamil").lower())
+        lang = _valid_lang(request.args.get("lang") or top_lang())
+
+        if lang == "english":
+            # Cinemeta answers English: films, shows and episode lists
+            if not query:
+                movies, shows = [], []
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    movie_job = pool.submit(stremio.popular, "movie")
+                    show_job = pool.submit(stremio.popular, "series")
+                    try:
+                        movies = movie_job.result(timeout=9)[:24]
+                    except Exception:
+                        movies = []
+                    try:
+                        shows = show_job.result(timeout=9)[:24]
+                    except Exception:
+                        shows = []
+                _n, body, _l = views.english_search_page(
+                    "", movies=movies, series=shows)
+                return render("Search", body, "english")
+
+            if E._WATCH.search(query) or E._CONTENT.search(query):
+                return convert()
+
+            results, failed = [], False
+            try:
+                results = stremio.search(query)
+            except Exception:
+                failed = True
+            _n, body, _l = views.english_search_page(
+                query, results, failed=failed)
+            return render("Search", body, "english")
 
         if not query:
             _n, body, _l = views.search_page("", lang, [], 0, 0, None, lang)
@@ -129,7 +177,7 @@ def create_app():
     @app.route("/settings", methods=["GET", "POST"])
     def settings():
         if request.method == "POST":
-            lang = _valid_lang((request.form.get("toplang") or "tamil").lower())
+            lang = _valid_lang((request.form.get("toplang") or "english").lower())
             resp = redirect("/settings", code=303)
             resp.set_cookie(TOP_LANG_COOKIE, lang,
                             max_age=COOKIE_MAX_AGE, samesite="Lax")
@@ -243,6 +291,58 @@ def create_app():
                 ok, ctype = False, ""
         _n, body, _l = views.convert_page(raw, movie_id, ok, ctype, "")
         return render("Convert", body)
+
+    # -------------------------------------------------------------- library
+    # The library page is gone: English is a language on /search now, and the
+    # old addresses keep working for anything already bookmarked.
+    @app.route("/library")
+    def library():
+        return redirect("/search?lang=english", code=303)
+
+    @app.route("/library/search")
+    def library_search():
+        query = (request.args.get("q") or "").strip()[:80]
+        target = "/search?lang=english"
+        if query:
+            target += "&q=" + quote(query)
+        return redirect(target, code=303)
+
+    @app.route("/title/<kind>/<media_id>")
+    def title(kind, media_id):
+        kind = "series" if kind == "series" else "movie"
+        media_id = (media_id or "").strip()[:40]
+        if not re.match(r"^[A-Za-z0-9:]+$", media_id):
+            return redirect("/search", code=303)
+
+        try:
+            item = stremio.meta(kind, media_id)
+        except Exception:
+            item = None
+        if not item:
+            return redirect("/search", code=303)
+
+        season, episode = 1, 1
+        seasons, by_season = [], {}
+        if kind == "series":
+            seasons = stremio.seasons(item) or [1]
+            # Season 0 is the specials list, and VidSpark has no episode to
+            # play there. A show opened without ?s= therefore starts on its
+            # first real season instead of on a page with no player at all.
+            first = next((value for value in seasons if value > 0), seasons[0])
+            season = _int_arg(request.args.get("s"), first)
+            if season not in seasons:
+                season = first
+            by_season = {value: stremio.episodes_for(item, value)
+                         for value in seasons}
+            current = by_season.get(season) or []
+            if current:
+                episode = _int_arg(request.args.get("e"), current[0]["episode"])
+                if not any(one["episode"] == episode for one in current):
+                    episode = current[0]["episode"]
+
+        _n, body, _l = views.title_page(item, season, episode, seasons,
+                                        by_season)
+        return render(item.get("name") or "Title", body)
 
     # ---------------------------------------------------------------- misc
     @app.route("/healthz")
